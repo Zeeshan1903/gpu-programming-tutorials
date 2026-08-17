@@ -1,55 +1,46 @@
+#include <stdio.h>
 #include <cuda_runtime.h>
-#include <iostream>
 
-__global__ void barrierKernel(int *counter, int *result) {
+__device__ int blockCounter = 0;
 
-  int tid = threadIdx.x;
+__global__ void gridBarrier(int totalBlocks) {
 
-  atomicAdd(counter, 1);
-
-  __syncthreads();
-
-  // Thread 0 waits until all threads have incremented counter
-  if (tid == 0) {
-    while (*counter < blockDim.x) {
+    // One thread from each block arrives at the barrier
+    if (threadIdx.x == 0) {
+        atomicAdd(&blockCounter, 1);
     }
 
-    *result = 1;
-  }
+    // Make sure all threads in this block have reached this point
+    __syncthreads();
 
-  // this is to check whether all threads are synced or not.
-  __syncthreads();
+    // Thread 0 of each block waits until every block has arrived
+    if (threadIdx.x == 0) {
+        while (atomicAdd(&blockCounter, 0) < totalBlocks) {
+            // Wait
+        }
+    }
 
-  printf("Thread %d passed the barrier\n", tid);
+    // Release all threads in the block
+    __syncthreads();
+
+    printf("Block %d | Thread %d | Counter = %d\n",
+           blockIdx.x,
+           threadIdx.x,
+           blockCounter);
 }
 
 int main() {
 
-  int *d_counter;
-  int *d_result;
+    int blocks = 2;
+    int threadsPerBlock = 10;
 
-  int counter = 0;
-  int result = 0;
+    gridBarrier<<<blocks, threadsPerBlock>>>(blocks);
 
-  cudaMalloc(&d_counter, sizeof(int));
-  cudaMalloc(&d_result, sizeof(int));
+    cudaError_t err = cudaDeviceSynchronize();
 
-  cudaMemcpy(d_counter, &counter, sizeof(int), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        printf("CUDA Error: %s\n", cudaGetErrorString(err));
+    }
 
-  cudaMemcpy(d_result, &result, sizeof(int), cudaMemcpyHostToDevice);
-
-  int threads = 8;
-
-  barrierKernel<<<1, threads>>>(d_counter, d_result);
-
-  cudaDeviceSynchronize();
-
-  cudaMemcpy(&result, d_result, sizeof(int), cudaMemcpyDeviceToHost);
-
-  std::cout << "Barrier completed: " << (result ? "Yes" : "No") << std::endl;
-
-  cudaFree(d_counter);
-  cudaFree(d_result);
-
-  return 0;
+    return 0;
 }
